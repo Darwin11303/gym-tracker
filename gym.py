@@ -4,11 +4,12 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import os
-import time  # <--- ESTO FALTABA (Arregla el error de la línea 253)
+import time  # <--- CORRECCIÓN 1: Agregado para que no falle al guardar
 import plotly.express as px
 
 # --- 1. CONFIGURACIÓN VISUAL (LIMPIA) ---
-st.set_page_config(page_title="GYM TRACKER", layout="wide", page_icon="🏋️")
+# CORRECCIÓN 2: Cambiado ícono a ":dumbbell:" (Mancuerna sola)
+st.set_page_config(page_title="GYM TRACKER", layout="wide", page_icon=":dumbbell:")
 
 # Estilos CSS
 st.markdown("""
@@ -18,7 +19,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏋️ GYM TRACKER")
+st.title("🔩 GYM TRACKER")
 
 # --- 2. MOTOR DE CONEXIÓN Y DATOS (BLINDADO) ---
 @st.cache_resource
@@ -29,9 +30,14 @@ def conectar_google_sheets():
         if os.path.exists('credentials.json'):
             creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', SCOPE)
         else:
-            creds_dict = st.secrets["gcp_service_account"]
+            # --- CORRECCIÓN 3 (CRÍTICA): CREAR COPIA MUTABLE ---
+            # Convertimos los secretos a un diccionario normal con dict() para poder editarlo
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            
+            # Ahora sí podemos modificar la copia sin que Streamlit se queje
             if "private_key" in creds_dict:
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
         
         client = gspread.authorize(creds)
@@ -51,13 +57,10 @@ def cargar_datos_seguros():
         
         df = pd.DataFrame(data)
         
-        # --- ARREGLO DE FECHAS DEFINITIVO ---
+        # Arreglo de Fechas
         if "Fecha" in df.columns:
-            # 1. Convertir a texto para uniformizar
             df["Fecha"] = df["Fecha"].astype(str)
-            # 2. Usar 'mixed' y 'dayfirst' para que entienda 28/12/2025 y 2025-12-28
             df["Fecha"] = pd.to_datetime(df["Fecha"], format='mixed', dayfirst=True, errors='coerce').dt.date
-            # 3. Borrar fechas inválidas
             df = df.dropna(subset=["Fecha"])
             
         # Asegurar Columnas Numéricas
@@ -75,7 +78,6 @@ def limpiar_cache():
 
 # --- 3. LÓGICA DE GIMNASIO ---
 def calcular_metricas(peso, series, reps):
-    # 1RM Epley
     rm = round(peso * (1 + (reps / 30)), 2) if reps > 1 else peso
     vol = round(series * reps * peso, 2)
     return rm, vol
@@ -114,7 +116,6 @@ with tab1:
             c1, c2 = st.columns([1, 2])
             fecha_input = c1.date_input("Fecha", datetime.now())
             
-            # Selector de ejercicios
             lista_ejercicios = sorted(df["Ejercicio"].unique()) if not df.empty and "Ejercicio" in df.columns else []
             ejercicio_sel = c2.selectbox("Ejercicio", ["Crear Nuevo..."] + lista_ejercicios)
             
@@ -122,7 +123,6 @@ with tab1:
             if ejercicio_sel == "Crear Nuevo...":
                 ejercicio_nombre = st.text_input("Nombre del Ejercicio").strip().upper()
             
-            # Inputs
             cc1, cc2, cc3, cc4 = st.columns(4)
             label_peso = "Peso (LB)" if modo_lb else "Peso (KG)"
             input_peso = cc1.number_input(label_peso, min_value=0.0, step=2.5)
@@ -141,7 +141,7 @@ with tab1:
                     peso_final = round(input_peso * 0.453592, 2) if modo_lb else input_peso
                     if guardar_entreno(fecha_input, ejercicio_nombre, peso_final, input_series, input_reps, input_rir, input_notas):
                         st.success(f"✅ Guardado: {ejercicio_nombre} ({peso_final} Kg)")
-                        time.sleep(1) # Ahora sí funcionará porque importamos time
+                        time.sleep(1)
                         st.rerun()
     
     with col_last:
@@ -225,7 +225,7 @@ with tab4:
                     sheet.update([df_final.columns.values.tolist()] + df_final.values.tolist())
                     limpiar_cache()
                     st.success("✅ Actualizado")
-                    time.sleep(1) # Ahora sí funcionará
+                    time.sleep(1)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
