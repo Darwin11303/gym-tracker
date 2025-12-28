@@ -42,8 +42,9 @@ def conectar_google_sheets():
         st.error(f"⚠️ Error Crítico de Conexión: {e}")
         return None
 
-# Usamos cache_data para los DATOS (se refresca solo cuando guardamos)
-@st.cache_data(ttl=60) # ttl=60 significa que si no haces nada, se refresca cada 60 segs max
+# Busca la función "cargar_datos_con_cache" y REEMPLAZALA COMPLETA con esto:
+
+@st.cache_data(ttl=60)
 def cargar_datos_con_cache():
     sheet = conectar_google_sheets()
     if sheet:
@@ -51,18 +52,29 @@ def cargar_datos_con_cache():
             data = sheet.get_all_records()
             if not data: return pd.DataFrame()
             df = pd.DataFrame(data)
-            # Limpieza de tipos
+            
+            # Limpieza de columnas numéricas
             cols_num = ["Peso_KG", "Series", "Reps", "1RM_Estimado", "Volumen"]
             for col in cols_num:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-            # Asegurar formato fecha
+            # --- ARREGLO DE FECHAS (Aquí está la magia) ---
             if "Fecha" in df.columns:
-                df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.date
+                # 1. Convertimos todo a texto primero para evitar errores de tipo
+                df["Fecha"] = df["Fecha"].astype(str)
+                
+                # 2. Usamos format='mixed' para que entienda DD/MM/YYYY y YYYY-MM-DD
+                # errors='coerce' significa: si una fecha está muy mal, bórrala pero no explotes
+                df["Fecha"] = pd.to_datetime(df["Fecha"], format='mixed', errors='coerce').dt.date
+                
+                # 3. Borramos las filas que quedaron sin fecha válida (por si acaso)
+                df = df.dropna(subset=["Fecha"])
+
             return df
         except Exception as e:
-            st.warning(f"La hoja existe pero está vacía o tiene formato incorrecto: {e}")
+            # Esto te mostrará el error exacto en pantalla si vuelve a fallar
+            st.warning(f"⚠️ Error procesando la tabla: {e}")
             return pd.DataFrame()
     return pd.DataFrame()
 
