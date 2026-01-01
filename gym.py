@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 import plotly.express as px
 
-# --- 1. CONFIGURACIÓN VISUAL (ESTILO PREMIUM) ---
+# --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Gym Tracker", page_icon="⚡", layout="wide")
 
 st.markdown("""
@@ -39,58 +39,24 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 25px;
     }
-    .card-header {
-        font-size: 0.9rem;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        color: #888;
-        margin-bottom: 10px;
-        font-weight: 600;
-    }
-    .main-metric {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #1E1E1E;
-    }
-    .sub-metric {
-        font-size: 1.2rem;
-        color: #555;
-        font-weight: 500;
-        margin-left: 8px;
-    }
-    .secondary-box {
-        text-align: right;
-        background: #fff;
-        padding: 8px 15px;
-        border-radius: 8px;
-        border: 1px solid #eee;
-    }
-    .notes-section {
-        margin-top: 15px;
-        padding-top: 10px;
-        border-top: 1px solid #ddd;
-        font-size: 0.95rem;
-        color: #666;
-        font-style: italic;
-    }
+    .card-header { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1.5px; color: #888; margin-bottom: 10px; font-weight: 600; }
+    .main-metric { font-size: 2rem; font-weight: 800; color: #1E1E1E; }
+    .sub-metric { font-size: 1.2rem; color: #555; font-weight: 500; margin-left: 8px; }
+    .secondary-box { text-align: right; background: #fff; padding: 8px 15px; border-radius: 8px; border: 1px solid #eee; }
+    .notes-section { margin-top: 15px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 0.95rem; color: #666; font-style: italic; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. VARIABLES ---
+# --- 2. VARIABLES DE ESTADO ---
 vars_init = {
-    'ejercicio_actual': None,
-    'peso_input': 0.0,
-    'reps_input': 10,
-    'series_input': 1,
-    'timer_running': False,
-    'ultimo_ej_visto': None,
-    'sesion_actual': 'FULL BODY'
+    'ejercicio_actual': None, 'peso_input': 0.0, 'reps_input': 10, 
+    'series_input': 1, 'timer_running': False, 'ultimo_ej_visto': None
 }
 for k, v in vars_init.items():
     if k not in st.session_state: st.session_state[k] = v
 
-# --- 3. CONEXIÓN ---
-@st.cache_resource
+# --- 3. CONEXIÓN (CON TTL DE SEGURIDAD) ---
+@st.cache_resource(ttl=600)
 def get_google_sheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
@@ -106,6 +72,7 @@ def get_google_sheet():
         st.error(f"Error de conexión: {e}")
         return None
 
+@st.cache_data(ttl=60) # <--- ESTO ARREGLA EL ERROR 'CLEAR'
 def get_data():
     sheet = get_google_sheet()
     if not sheet: return pd.DataFrame()
@@ -114,46 +81,38 @@ def get_data():
         df = pd.DataFrame(data)
         if df.empty: return df
         
-        # --- NUEVO: CORRECCIÓN DE NOMBRES DE COLUMNAS ---
-        # Esto soluciona que en Excel tengas "Tipo_sesion" y el código busque "Tipo_Sesion"
-        df.columns = [c.strip() for c in df.columns] # Quitar espacios extra
+        # Corrección de nombres de columnas
+        df.columns = [c.strip() for c in df.columns]
         rename_map = {
-            "Tipo_sesion": "Tipo_Sesion",
-            "tipo_sesion": "Tipo_Sesion",
-            "categoria": "Categoria",
-            "Peso_kg": "Peso_KG"
+            "Tipo_sesion": "Tipo_Sesion", "tipo_sesion": "Tipo_Sesion",
+            "categoria": "Categoria", "Peso_kg": "Peso_KG", "1RM_Estimado": "1RM_Estimado"
         }
         df = df.rename(columns=rename_map)
 
-        # Limpieza de texto
         if "Ejercicio" in df.columns:
             df["Ejercicio"] = df["Ejercicio"].astype(str).str.strip().str.upper()
         
-        # Corrección Fechas Mixtas
+        # Fecha Mixta
         if "Fecha" in df.columns:
             df["Fecha"] = pd.to_datetime(df["Fecha"], format='mixed', dayfirst=True, errors='coerce').dt.date
             df = df.dropna(subset=["Fecha"])
         
-        # Columnas nuevas (asegurar existencia)
-        if "Categoria" not in df.columns: df["Categoria"] = "GENERAL"
-        if "Tipo_Sesion" not in df.columns: df["Tipo_Sesion"] = "ENTRENO"
-
-        # Rellenar vacíos para evitar errores de filtro
-        df["Categoria"] = df["Categoria"].fillna("GENERAL").replace("", "GENERAL")
-        df["Tipo_Sesion"] = df["Tipo_Sesion"].fillna("ENTRENO").replace("", "ENTRENO")
-
-        cols_num = ["Peso_KG", "Series", "Reps", "Volumen"]
+        cols_num = ["Peso_KG", "Series", "Reps", "Volumen", "1RM_Estimado"]
         for col in cols_num:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                
-        # Calcular Volumen si falta
+
+        # Rellenar faltantes
+        if "Categoria" not in df.columns: df["Categoria"] = "GENERAL"
+        if "Tipo_Sesion" not in df.columns: df["Tipo_Sesion"] = "ENTRENO"
+        df["Categoria"] = df["Categoria"].fillna("GENERAL").replace("", "GENERAL")
+        df["Tipo_Sesion"] = df["Tipo_Sesion"].fillna("ENTRENO").replace("", "ENTRENO")
+        
+        # --- CORRECCIÓN MATEMÁTICA VOLUMEN ---
+        # Si el volumen es 0, lo calculamos como Peso * Reps (por fila)
         if "Volumen" in df.columns and "Peso_KG" in df.columns:
-            df["Volumen"] = df.apply(
-                lambda x: (x["Peso_KG"] * x["Series"] * x["Reps"]) if x["Volumen"] == 0 else x["Volumen"], 
-                axis=1
-            )
-            
+            df["Volumen"] = df.apply(lambda x: (x["Peso_KG"]*x["Reps"]) if x["Volumen"]==0 else x["Volumen"], axis=1)
+
         return df
     except Exception as e:
         st.error(f"Error leyendo datos: {e}")
@@ -166,36 +125,28 @@ def save_data(row):
         return True
     return False
 
-# --- 4. LÓGICA DE DATOS ---
+# --- 4. LÓGICA ---
 def get_last_session_stats(df, ejercicio):
     if df.empty or ejercicio not in df["Ejercicio"].values: return None
-    
-    # Ordenar por fecha reciente
     historial = df[df["Ejercicio"] == ejercicio].sort_values("Fecha", ascending=False)
     ultima_fecha = historial.iloc[0]["Fecha"]
-    
-    # Filtrar solo esa sesión
     sesion = historial[historial["Fecha"] == ultima_fecha]
     
-    # Mejor serie
+    # Mejor serie basada en peso máximo
     mejor = sesion.loc[sesion["Peso_KG"].idxmax()]
     
-    # Corrección Series
-    total_series = int(sesion["Series"].sum())
+    # Series Totales = Número de filas registradas ese día (Sets reales)
+    total_series_reales = len(sesion)
     
     return {
-        "fecha": ultima_fecha,
-        "peso": float(mejor["Peso_KG"]),
-        "reps": int(mejor["Reps"]),
-        "series": total_series,
-        "notas": str(mejor.get("Notas", ""))
+        "fecha": ultima_fecha, "peso": float(mejor["Peso_KG"]),
+        "reps": int(mejor["Reps"]), "series": total_series_reales, "notas": str(mejor.get("Notas", ""))
     }
 
 def convert_display(val, is_lb): return round(val * 2.20462, 2) if is_lb else val
 def convert_save(val, is_lb): return round(val / 2.20462, 2) if is_lb else val
 
 # --- 5. INTERFAZ ---
-
 with st.sidebar:
     st.header("⚙️ Ajustes")
     modo_lb = st.toggle("Modo Libras (LB)", value=False)
@@ -208,9 +159,8 @@ with st.sidebar:
 df = get_data()
 st.title("Gym Tracker Pro")
 
-# === SELECTOR DE RUTINA ===
+# Selector de Rutina
 st.markdown("### ¿Qué entrenamos hoy?")
-# Asegúrate de que estos nombres coincidan con los de tu Excel
 tipos_dia = ["PECHO Y TRÍCEPS", "ESPALDA Y BÍCEPS", "PIERNA", "HOMBRO", "FULL BODY", "OTRO"]
 dia_actual = st.selectbox("Selecciona Rutina:", tipos_dia, index=0, label_visibility="collapsed", key="dia_focus")
 
@@ -218,7 +168,6 @@ t1, t2, t3 = st.tabs(["💪 REGISTRO", "📊 PROGRESO", "📅 DIARIO"])
 
 # === TAB 1: REGISTRO ===
 with t1:
-    # Filtro inteligente
     cats_dia = []
     if dia_actual == "PECHO Y TRÍCEPS": cats_dia = ["PECHO", "TRÍCEPS"]
     elif dia_actual == "ESPALDA Y BÍCEPS": cats_dia = ["ESPALDA", "BÍCEPS"]
@@ -234,20 +183,12 @@ with t1:
     if modo == "Seleccionar":
         if not df.empty:
             lista_total = df[["Ejercicio", "Categoria"]].drop_duplicates().sort_values("Ejercicio")
-            
-            # --- MEJORA: FILTRO INSENSIBLE A MAYÚSCULAS ---
             if dia_actual not in ["FULL BODY", "OTRO"]:
-                # Creamos columnas temporales en mayúsculas para comparar sin errores
                 lista_total["Cat_Upper"] = lista_total["Categoria"].str.upper()
                 cats_dia_upper = [c.upper() for c in cats_dia]
-                
                 lista_filtrada = lista_total[lista_total["Cat_Upper"].isin(cats_dia_upper)]
-                
-                if lista_filtrada.empty:
-                    st.toast(f"No encontré ejercicios de {dia_actual}. Mostrando todo.", icon="ℹ️")
-                    lista_mostrar = lista_total["Ejercicio"].unique()
-                else:
-                    lista_mostrar = lista_filtrada["Ejercicio"].unique()
+                lista_mostrar = lista_filtrada["Ejercicio"].unique() if not lista_filtrada.empty else lista_total["Ejercicio"].unique()
+                if lista_filtrada.empty: st.toast(f"No hay ejercicios de {dia_actual}. Mostrando todo.", icon="ℹ️")
             else:
                 lista_mostrar = lista_total["Ejercicio"].unique()
             
@@ -259,8 +200,7 @@ with t1:
             if ej_seleccionado:
                 cat_row = df[df["Ejercicio"] == ej_seleccionado]
                 if not cat_row.empty: cat_seleccionada = cat_row.iloc[0]["Categoria"]
-    
-    else: # MODO CREAR
+    else: 
         c_new1, c_new2 = st.columns([2, 1])
         nuevo_nombre = c_new1.text_input("Nombre Ejercicio:").strip().upper()
         cat_manual = c_new2.selectbox("Categoría:", ["PECHO", "ESPALDA", "PIERNA", "HOMBRO", "BÍCEPS", "TRÍCEPS", "ABDOMEN", "OTRO"])
@@ -269,7 +209,6 @@ with t1:
             cat_seleccionada = cat_manual
             st.success(f"Creando: {nuevo_nombre} ({cat_manual})")
 
-    # Tarjeta y Formulario
     if ej_seleccionado:
         st.session_state.ejercicio_actual = ej_seleccionado
         stats = get_last_session_stats(df, ej_seleccionado)
@@ -285,55 +224,64 @@ with t1:
                 st.session_state.series_input = 1
             st.session_state.ultimo_ej_visto = ej_seleccionado
 
-        # --- TARJETA VISUAL PREMIUM ---
+        # Tarjeta Info
         if stats:
             p_val = convert_display(stats['peso'], modo_lb)
             st.markdown(f"""
             <div class="info-card">
                 <div class="card-header">📅 Última Sesión: {stats['fecha']}</div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <span class="main-metric">{p_val} {unit}</span>
-                        <span class="sub-metric">x {stats['reps']} reps</span>
-                    </div>
-                    <div class="secondary-box">
-                        <span style="font-size: 1.5rem; font-weight: bold; color: #333;">{stats['series']}</span><br>
-                        <span style="font-size: 0.75rem; color: #666; font-weight: bold;">SERIES TOTALES</span>
-                    </div>
+                    <div><span class="main-metric">{p_val} {unit}</span> <span class="sub-metric">x {stats['reps']} reps</span></div>
+                    <div class="secondary-box"><span style="font-size: 1.5rem; font-weight: bold; color: #333;">{stats['series']}</span><br><span style="font-size: 0.75rem; color: #666; font-weight: bold;">SERIES TOTALES</span></div>
                 </div>
-                <div class="notes-section">
-                    📝 {stats['notas'] if stats['notas'] else "Sin notas registradas"}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                <div class="notes-section">📝 {stats['notas'] if stats['notas'] else "Sin notas registradas"}</div>
+            </div>""", unsafe_allow_html=True)
         else:
             st.info("👋 ¡Primer registro para este ejercicio!")
 
-        # FORMULARIO
         st.markdown(f"#### Registro Serie {st.session_state.series_input}")
         c1, c2 = st.columns(2)
         peso = c1.number_input(f"Peso ({unit})", value=float(st.session_state.peso_input), step=2.5)
         reps = c2.number_input("Reps", value=int(st.session_state.reps_input), step=1)
-        
         c3, c4 = st.columns(2)
-        series = c3.number_input("N° Serie", value=int(st.session_state.series_input), step=1)
-        rir = c4.selectbox("RIR (Reserva)", ["0", "1", "2", "3", "Suave"], index=1)
+        series_num = c3.number_input("N° Serie", value=int(st.session_state.series_input), step=1)
+        rir = c4.selectbox("RIR", ["0", "1", "2", "3", "Suave"], index=1)
         notas = st.text_input("Notas de la serie", placeholder="Ej: Técnica inestable...")
 
         if st.button("✅ GUARDAR SERIE", type="primary"):
             try:
                 peso_kg = convert_save(peso, modo_lb)
-                vol = peso_kg * reps * series
-                fecha = datetime.now().strftime("%d/%m/%Y")
                 
-                # Guardamos 10 columnas
-                row = [fecha, ej_seleccionado, peso_kg, series, reps, rir, vol, notas, cat_seleccionada, dia_actual]
+                # --- CÁLCULOS CORREGIDOS ---
+                # Volumen = Peso * Reps (Correcto por serie)
+                vol_serie = peso_kg * reps 
+                
+                # 1RM Estimado (Fórmula Epley)
+                one_rm = round(peso_kg * (1 + (reps / 30)), 2)
+                
+                # Fecha formato estandar Excel
+                fecha_excel = datetime.now().strftime("%Y-%m-%d")
+                
+                # --- ORDEN ESTRICTO DE COLUMNAS ---
+                row = [
+                    fecha_excel,        # A: Fecha
+                    ej_seleccionado,    # B: Ejercicio
+                    peso_kg,            # C: Peso_KG
+                    series_num,         # D: Series (Visual)
+                    reps,               # E: Reps
+                    rir,                # F: RIR
+                    one_rm,             # G: 1RM_Estimado (AQUÍ ESTABA EL HUECO)
+                    vol_serie,          # H: Volumen
+                    notas,              # I: Notas
+                    cat_seleccionada,   # J: Categoria
+                    dia_actual          # K: Tipo_Sesion
+                ]
                 
                 if save_data(row):
-                    st.toast(f"Guardado!", icon="🔥")
+                    st.toast(f"Guardado Correctamente!", icon="✅")
                     st.session_state.series_input += 1
                     st.session_state.peso_input = peso
-                    get_data.clear()
+                    get_data.clear() # Limpia caché para ver el dato nuevo
                     st.session_state.timer_running = True
                     st.rerun()
             except Exception as e: st.error(f"Error: {e}")
@@ -342,7 +290,7 @@ with t1:
         st.divider()
         col_t, col_b = st.columns([3,1])
         ph = col_t.empty()
-        if col_b.button("Saltar Descanso"):
+        if col_b.button("Saltar"):
             st.session_state.timer_running = False
             st.rerun()
         for s in range(90, 0, -1):
@@ -355,50 +303,28 @@ with t1:
 # === TAB 2: PROGRESO ===
 with t2:
     if not df.empty:
-        ej_g = st.selectbox("Analizar Ejercicio:", sorted(df["Ejercicio"].unique()))
+        ej_g = st.selectbox("Analizar:", sorted(df["Ejercicio"].unique()))
         df_g = df[df["Ejercicio"] == ej_g].copy()
-        
         if not df_g.empty:
-            df_day = df_g.groupby("Fecha").agg({
-                "Peso_KG": "max",
-                "Volumen": "sum"
-            }).reset_index().sort_values("Fecha")
-            
-            st.subheader("Evolución de Rendimiento")
-            
-            col_graph1, col_graph2 = st.columns(2)
-            with col_graph1:
-                fig1 = px.area(df_day, x="Fecha", y="Peso_KG", markers=True, 
-                               title="<b>Fuerza Máxima (KG)</b>", 
-                               labels={"Peso_KG": "Mejor Serie"})
+            df_day = df_g.groupby("Fecha").agg({"Peso_KG": "max", "Volumen": "sum"}).reset_index().sort_values("Fecha")
+            c1, c2 = st.columns(2)
+            with c1:
+                fig1 = px.area(df_day, x="Fecha", y="Peso_KG", markers=True, title="<b>Fuerza Máxima (KG)</b>")
                 fig1.update_traces(line_color="#FF4B4B", fillcolor="rgba(255, 75, 75, 0.2)")
-                fig1.update_layout(height=350, margin=dict(l=20, r=20, t=40, b=20))
                 st.plotly_chart(fig1, use_container_width=True)
-                
-            with col_graph2:
-                fig2 = px.bar(df_day, x="Fecha", y="Volumen", 
-                              title="<b>Volumen Total (KG)</b>",
-                              color="Volumen", color_continuous_scale="RdBu_r")
-                fig2.update_layout(coloraxis_showscale=False, height=350, margin=dict(l=20, r=20, t=40, b=20))
+            with c2:
+                fig2 = px.bar(df_day, x="Fecha", y="Volumen", title="<b>Volumen Total (KG)</b>", color="Volumen", color_continuous_scale="RdBu_r")
+                fig2.update_layout(coloraxis_showscale=False)
                 st.plotly_chart(fig2, use_container_width=True)
 
 # === TAB 3: DIARIO ===
 with t3:
-    st.subheader("Historial de Entrenamientos")
+    st.subheader("Historial")
     if not df.empty:
         grupos = df.groupby(["Fecha", "Tipo_Sesion"]).size().reset_index().sort_values("Fecha", ascending=False)
-        
         for _, row in grupos.iterrows():
             f = row["Fecha"]
             tipo = row["Tipo_Sesion"]
-            
-            fecha_str = f.strftime('%d/%m/%Y')
-            titulo = f"📅 {fecha_str} - {tipo}"
-            
-            with st.expander(titulo):
+            with st.expander(f"📅 {f.strftime('%Y-%m-%d')} - {tipo}"):
                 d = df[(df["Fecha"] == f) & (df["Tipo_Sesion"] == tipo)]
-                st.dataframe(
-                    d[["Ejercicio", "Peso_KG", "Series", "Reps", "RIR", "Notas"]],
-                    use_container_width=True, 
-                    hide_index=True
-                )
+                st.dataframe(d[["Ejercicio", "Peso_KG", "Series", "Reps", "RIR", "Notas"]], use_container_width=True, hide_index=True)
