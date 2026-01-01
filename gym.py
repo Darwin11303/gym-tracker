@@ -277,12 +277,12 @@ with t_input:
         st.session_state.timer_running = False
         st.rerun()
 
-# === TAB 2: PROGRESO (GRÁFICAS SEPARADAS Y LIMPIAS) ===
+# === TAB 2: PROGRESO VISUAL (MEJORADO) ===
 with t_graphs:
     if df.empty:
-        st.warning("Faltan datos.")
+        st.warning("Faltan datos para generar gráficas.")
     else:
-        st.subheader("Análisis de Rendimiento")
+        st.subheader("🔥 Rendimiento Visual")
         lista_g = sorted(df["Ejercicio"].unique())
         ej_g = st.selectbox("Selecciona Ejercicio:", lista_g, key="sb_graph")
         
@@ -290,8 +290,7 @@ with t_graphs:
         df_g = df[df["Ejercicio"] == ej_g].copy()
         
         if not df_g.empty:
-            # AGRUPAR POR DÍA (La clave para gráficas limpias)
-            # Calculamos: Peso Máximo del día y Volumen Total del día
+            # Agrupar por día para limpiar la gráfica
             df_day = df_g.groupby("Fecha").agg({
                 "Peso_KG": "max",
                 "Volumen": "sum"
@@ -300,23 +299,44 @@ with t_graphs:
             col_g1, col_g2 = st.columns(2)
             
             with col_g1:
-                # Gráfica 1: Fuerza (Peso Máximo)
-                fig1 = px.line(df_day, x="Fecha", y="Peso_KG", markers=True, 
-                               title="Fuerza Máxima (Mejor Serie)",
+                # 1. GRÁFICA DE FUERZA (ÁREA)
+                # El relleno (area) da sensación de solidez
+                fig1 = px.area(df_day, x="Fecha", y="Peso_KG", markers=True, 
+                               title="<b>Fuerza Máxima</b> (Tu mejor serie)",
                                labels={"Peso_KG": "Peso (KG)"})
-                fig1.update_traces(line_color="#FF4B4B", line_width=3)
-                fig1.update_layout(height=350)
+                
+                # Estilo: Línea roja neón con relleno suave
+                fig1.update_traces(line_color="#FF4B4B", line_width=4, 
+                                   marker_size=8, marker_color="white",
+                                   fillcolor="rgba(255, 75, 75, 0.2)") # Relleno semitransparente
+                
+                fig1.update_layout(
+                    height=350,
+                    plot_bgcolor="rgba(0,0,0,0)", # Fondo transparente
+                    yaxis_gridcolor="rgba(200, 200, 200, 0.2)" # Rejilla sutil
+                )
                 st.plotly_chart(fig1, use_container_width=True)
             
             with col_g2:
-                # Gráfica 2: Capacidad de Trabajo (Volumen)
+                # 2. GRÁFICA DE VOLUMEN (COLOR INTELIGENTE)
+                # El color cambia según qué tan duro fue el entreno (Heatmap)
                 fig2 = px.bar(df_day, x="Fecha", y="Volumen", 
-                              title="Volumen Total (Carga de Trabajo)",
-                              labels={"Volumen": "Volumen Total (KG)"})
-                fig2.update_traces(marker_color="#262730")
-                fig2.update_layout(height=350)
+                              title="<b>Volumen de Carga</b> (Intensidad)",
+                              labels={"Volumen": "Kilos Totales"},
+                              color="Volumen", # <--- Aquí está la magia
+                              color_continuous_scale="RdBu_r") # Azul (bajo) a Rojo (alto)
+                
+                fig2.update_layout(
+                    height=350,
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    coloraxis_showscale=False, # Ocultamos la barra de colores lateral para limpieza
+                    yaxis_gridcolor="rgba(200, 200, 200, 0.2)"
+                )
                 st.plotly_chart(fig2, use_container_width=True)
-
+                
+                # Métrica rápida abajo
+                max_vol = df_day["Volumen"].max()
+                st.caption(f"💡 Tu sesión más dura moviste un total de **{int(max_vol)} Kg**.")
 # === TAB 3: HISTORIAL (LIMPIO) ===
 with t_history:
     st.subheader("Diario")
