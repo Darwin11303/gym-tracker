@@ -27,10 +27,10 @@ st.markdown("""
         transform: scale(1.01);
     }
     
-    /* Inputs grandes */
+    /* Inputs */
     input[type=number] { font-size: 1.2rem; }
     
-    /* TARJETA ÚLTIMA SESIÓN (CON RIR) */
+    /* TARJETA ÚLTIMA SESIÓN */
     .info-card {
         background-color: #f8f9fa;
         padding: 20px;
@@ -51,7 +51,7 @@ st.markdown("""
 # --- 2. VARIABLES DE ESTADO ---
 vars_init = {
     'ejercicio_actual': None, 'peso_input': 0.0, 'reps_input': 10, 
-    'series_input': 4, 'ultimo_ej_visto': None # Default series a 4 para ganar tiempo
+    'series_input': 4, 'ultimo_ej_visto': None
 }
 for k, v in vars_init.items():
     if k not in st.session_state: st.session_state[k] = v
@@ -82,7 +82,7 @@ def get_data():
         df = pd.DataFrame(data)
         if df.empty: return df
         
-        # Corrección de columnas
+        # Corrección Nombres
         df.columns = [c.strip() for c in df.columns]
         rename_map = {
             "Tipo_sesion": "Tipo_Sesion", "tipo_sesion": "Tipo_Sesion",
@@ -102,17 +102,22 @@ def get_data():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
+        # Rellenar textos
         if "Categoria" not in df.columns: df["Categoria"] = "GENERAL"
         if "Tipo_Sesion" not in df.columns: df["Tipo_Sesion"] = "ENTRENO"
         df["Categoria"] = df["Categoria"].fillna("GENERAL").replace("", "GENERAL")
         df["Tipo_Sesion"] = df["Tipo_Sesion"].fillna("ENTRENO").replace("", "ENTRENO")
         
-        # Cálculo de Volumen (Modo Bulk: Peso * Reps * Series)
+        # --- CÁLCULOS MASIVOS (VECTORIZADOS - MÁS RÁPIDO) ---
+        # 1. Recalcular 1RM para todo el historial (para que la gráfica sea honesta con datos viejos)
+        if "Peso_KG" in df.columns and "Reps" in df.columns:
+            df["1RM_Estimado"] = df["Peso_KG"] * (1 + (df["Reps"] / 30))
+            
+        # 2. Recalcular Volumen Correcto (Peso * Reps * Series)
         if "Volumen" in df.columns and "Peso_KG" in df.columns:
-            df["Volumen"] = df.apply(
-                lambda x: (x["Peso_KG"] * x["Reps"] * x["Series"]) if x["Volumen"]==0 else x["Volumen"], 
-                axis=1
-            )
+             # Solo si es 0 (dato perdido) lo recalculamos
+             mask = df["Volumen"] == 0
+             df.loc[mask, "Volumen"] = df.loc[mask, "Peso_KG"] * df.loc[mask, "Reps"] * df.loc[mask, "Series"]
 
         return df
     except Exception as e:
@@ -126,7 +131,7 @@ def save_data(row):
         return True
     return False
 
-# --- 4. LÓGICA (AHORA EXTRAE EL RIR) ---
+# --- 4. LÓGICA (CORREGIDA: BUSCAR MEJOR 1RM) ---
 def get_last_session_stats(df, ejercicio):
     if df.empty or ejercicio not in df["Ejercicio"].values: return None
     
@@ -134,22 +139,21 @@ def get_last_session_stats(df, ejercicio):
     ultima_fecha = historial.iloc[0]["Fecha"]
     sesion = historial[historial["Fecha"] == ultima_fecha]
     
-    # Mejor serie (por peso)
-    mejor = sesion.loc[sesion["Peso_KG"].idxmax()]
+    # --- CORRECCIÓN CLAVE: La mejor serie es la que tiene mayor 1RM, no mayor Peso ---
+    # Esto premia el esfuerzo real (90x12 > 100x1)
+    idx_mejor = sesion["1RM_Estimado"].idxmax()
+    mejor = sesion.loc[idx_mejor]
     
-    # Sumar la columna Series (Esto arregla tu problema: Si pusiste 4, saldrá 4)
     total_series_reales = int(sesion["Series"].sum())
-    
-    # Extraer RIR (puede ser texto o numero)
-    rir_val = mejor["RIR"]
     
     return {
         "fecha": ultima_fecha, 
         "peso": float(mejor["Peso_KG"]),
         "reps": int(mejor["Reps"]), 
         "series": total_series_reales, 
-        "rir": rir_val, # <--- NUEVO
-        "notas": str(mejor.get("Notas", ""))
+        "rir": mejor["RIR"],
+        "notas": str(mejor.get("Notas", "")),
+        "1rm": float(mejor["1RM_Estimado"]) # Guardamos esto para validación interna
     }
 
 def convert_display(val, is_lb): return round(val * 2.20462, 2) if is_lb else val
@@ -201,115 +205,4 @@ with t1:
             
             idx = 0
             if st.session_state.ejercicio_actual in lista_mostrar:
-                idx = list(lista_mostrar).index(st.session_state.ejercicio_actual)
-            
-            ej_seleccionado = st.selectbox("Ejercicio:", lista_mostrar, index=idx)
-            if ej_seleccionado:
-                cat_row = df[df["Ejercicio"] == ej_seleccionado]
-                if not cat_row.empty: cat_seleccionada = cat_row.iloc[0]["Categoria"]
-    else: 
-        c1, c2 = st.columns([2, 1])
-        nuevo = c1.text_input("Nombre:").strip().upper()
-        cat = c2.selectbox("Cat:", ["PECHO", "ESPALDA", "PIERNA", "HOMBRO", "BÍCEPS", "TRÍCEPS", "ABDOMEN", "OTRO"])
-        if nuevo:
-            ej_seleccionado = nuevo
-            cat_seleccionada = cat
-            st.success(f"Creando: {nuevo}")
-
-    if ej_seleccionado:
-        st.session_state.ejercicio_actual = ej_seleccionado
-        stats = get_last_session_stats(df, ej_seleccionado)
-        
-        # Auto-Fill Inteligente
-        if st.session_state.ultimo_ej_visto != ej_seleccionado:
-            if stats:
-                st.session_state.peso_input = convert_display(stats["peso"], modo_lb)
-                st.session_state.reps_input = stats["reps"]
-                # Carga las series que hiciste la vez pasada (ej: 4)
-                st.session_state.series_input = stats["series"] 
-            else:
-                st.session_state.peso_input = 0.0
-                st.session_state.series_input = 4
-            st.session_state.ultimo_ej_visto = ej_seleccionado
-
-        # --- TARJETA VISUAL MEJORADA (CON RIR) ---
-        if stats:
-            p_val = convert_display(stats['peso'], modo_lb)
-            st.markdown(f"""
-            <div class="info-card">
-                <div class="card-header">📅 Última Sesión: {stats['fecha']}</div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <span class="main-metric">{p_val} {unit}</span>
-                        <span class="sub-metric">x {stats['reps']} reps</span>
-                        <span class="rir-tag">RIR: {stats['rir']}</span>
-                    </div>
-                    <div class="secondary-box">
-                        <span style="font-size: 1.5rem; font-weight: bold; color: #333;">{stats['series']}</span><br>
-                        <span style="font-size: 0.75rem; color: #666; font-weight: bold;">SERIES REALIZADAS</span>
-                    </div>
-                </div>
-                <div class="notes-section">📝 {stats['notas'] if stats['notas'] else "Sin notas"}</div>
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.info("👋 Primer registro.")
-
-        # --- INPUTS (MODO BULK: 1 FILA = TODO EL EJERCICIO) ---
-        st.markdown(f"#### Registrar Ejercicio Completo")
-        c1, c2 = st.columns(2)
-        peso = c1.number_input(f"Peso ({unit})", value=float(st.session_state.peso_input), step=2.5)
-        reps = c2.number_input("Reps (por serie)", value=int(st.session_state.reps_input), step=1)
-        
-        c3, c4 = st.columns(2)
-        # Aquí escribes "4" y eso es lo que se guardará y mostrará la próxima vez
-        series = c3.number_input("Cantidad de Series", value=int(st.session_state.series_input), step=1)
-        rir = c4.selectbox("RIR (Reserva)", ["0", "1", "2", "3", "Suave"], index=1)
-        notas = st.text_input("Notas del ejercicio", placeholder="Ej: Me costó la última serie...")
-
-        if st.button("✅ GUARDAR EJERCICIO", type="primary"):
-            try:
-                peso_kg = convert_save(peso, modo_lb)
-                
-                # VOLUMEN TOTAL = Peso * Reps * Series (Correcto para input masivo)
-                vol_total = peso_kg * reps * series
-                
-                one_rm = round(peso_kg * (1 + (reps / 30)), 2)
-                fecha_excel = datetime.now().strftime("%Y-%m-%d")
-                
-                row = [
-                    fecha_excel, ej_seleccionado, peso_kg, series, reps, rir, 
-                    one_rm, vol_total, notas, cat_seleccionada, dia_actual
-                ]
-                
-                if save_data(row):
-                    st.toast(f"¡Guardado! ({series} series de {reps})", icon="🔥")
-                    get_data.clear()
-                    # No hacemos rerun para que puedas ver lo que guardaste
-            except Exception as e: st.error(f"Error: {e}")
-
-# === VISUALIZACIÓN ===
-with t2:
-    if not df.empty:
-        ej_g = st.selectbox("Analizar:", sorted(df["Ejercicio"].unique()))
-        df_g = df[df["Ejercicio"] == ej_g].copy()
-        if not df_g.empty:
-            df_day = df_g.groupby("Fecha").agg({"Peso_KG":"max", "Volumen":"sum"}).reset_index().sort_values("Fecha")
-            c1, c2 = st.columns(2)
-            with c1:
-                fig1 = px.area(df_day, x="Fecha", y="Peso_KG", markers=True, title="<b>Fuerza (1RM Est)</b>")
-                fig1.update_traces(line_color="#FF4B4B", fillcolor="rgba(255, 75, 75, 0.2)")
-                st.plotly_chart(fig1, use_container_width=True)
-            with c2:
-                fig2 = px.bar(df_day, x="Fecha", y="Volumen", title="<b>Volumen (Kilos Totales)</b>", color="Volumen", color_continuous_scale="RdBu_r")
-                fig2.update_layout(coloraxis_showscale=False)
-                st.plotly_chart(fig2, use_container_width=True)
-
-with t3:
-    if not df.empty:
-        grupos = df.groupby(["Fecha", "Tipo_Sesion"]).size().reset_index().sort_values("Fecha", ascending=False)
-        for _, row in grupos.iterrows():
-            f = row["Fecha"]
-            tipo = row["Tipo_Sesion"]
-            with st.expander(f"📅 {f} - {tipo}"):
-                d = df[(df["Fecha"] == f) & (df["Tipo_Sesion"] == tipo)]
-                st.dataframe(d[["Ejercicio", "Peso_KG", "Series", "Reps", "RIR", "Notas"]], use_container_width=True, hide_index=True)
+                idx = list(lista_mostrar).index(st.session
