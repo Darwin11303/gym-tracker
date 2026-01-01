@@ -7,7 +7,8 @@ import time
 import plotly.express as px
 
 # --- 1. CONFIGURACIÓN VISUAL (ESTILO PREMIUM) ---
-st.set_page_config(page_title="Gym Tracker", page_icon="🦍", layout="wide")
+# Icono neutro y configuración Wide
+st.set_page_config(page_title="Gym Tracker", page_icon="⚡", layout="wide")
 
 st.markdown("""
     <style>
@@ -30,12 +31,12 @@ st.markdown("""
     /* INPUTS */
     input[type=number] { font-size: 1.2rem; }
     
-    /* TARJETA ÚLTIMA SESIÓN (RECUPERADA Y MEJORADA) */
+    /* TARJETA ÚLTIMA SESIÓN (PREMIUM) */
     .info-card {
         background-color: #f8f9fa;
         padding: 20px;
         border-radius: 12px;
-        border-left: 6px solid #FF4B4B; /* Borde rojo característico */
+        border-left: 6px solid #FF4B4B;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 25px;
     }
@@ -61,7 +62,7 @@ st.markdown("""
     .secondary-box {
         text-align: right;
         background: #fff;
-        padding: 5px 15px;
+        padding: 8px 15px;
         border-radius: 8px;
         border: 1px solid #eee;
     }
@@ -114,14 +115,17 @@ def get_data():
         df = pd.DataFrame(data)
         if df.empty: return df
         
-        # Limpieza
+        # Limpieza de texto
         if "Ejercicio" in df.columns:
             df["Ejercicio"] = df["Ejercicio"].astype(str).str.strip().str.upper()
+        
+        # --- CORRECCIÓN FECHAS MIXTAS ---
+        # format='mixed' permite leer "19/12/2025" y "2025-12-26" a la vez sin fallar
         if "Fecha" in df.columns:
-            df["Fecha"] = pd.to_datetime(df["Fecha"], dayfirst=True, errors='coerce').dt.date
+            df["Fecha"] = pd.to_datetime(df["Fecha"], format='mixed', dayfirst=True, errors='coerce').dt.date
             df = df.dropna(subset=["Fecha"])
         
-        # Columnas nuevas (asegurar compatibilidad)
+        # Columnas nuevas
         if "Categoria" not in df.columns: df["Categoria"] = "GENERAL"
         if "Tipo_Sesion" not in df.columns: df["Tipo_Sesion"] = "ENTRENO"
 
@@ -129,6 +133,14 @@ def get_data():
         for col in cols_num:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
+        # Calcular Volumen si falta (Parche para datos viejos)
+        if "Volumen" in df.columns and "Peso_KG" in df.columns:
+            df["Volumen"] = df.apply(
+                lambda x: (x["Peso_KG"] * x["Series"] * x["Reps"]) if x["Volumen"] == 0 else x["Volumen"], 
+                axis=1
+            )
+            
         return df
     except Exception:
         return pd.DataFrame()
@@ -140,20 +152,29 @@ def save_data(row):
         return True
     return False
 
-# --- 4. LÓGICA AUXILIAR ---
+# --- 4. LÓGICA DE DATOS ---
 def get_last_session_stats(df, ejercicio):
     if df.empty or ejercicio not in df["Ejercicio"].values: return None
-    # Obtener última fecha
+    
+    # Ordenar por fecha reciente
     historial = df[df["Ejercicio"] == ejercicio].sort_values("Fecha", ascending=False)
     ultima_fecha = historial.iloc[0]["Fecha"]
-    # Obtener datos de ESA sesión
+    
+    # Filtrar solo esa sesión
     sesion = historial[historial["Fecha"] == ultima_fecha]
+    
+    # Mejor serie (para el peso)
     mejor = sesion.loc[sesion["Peso_KG"].idxmax()]
+    
+    # --- CORRECCIÓN SERIES ---
+    # Sumamos el valor de la columna 'Series' en lugar de contar filas
+    total_series = int(sesion["Series"].sum())
+    
     return {
         "fecha": ultima_fecha,
         "peso": float(mejor["Peso_KG"]),
         "reps": int(mejor["Reps"]),
-        "series": len(sesion), # Total de series hechas ese día
+        "series": total_series, # Ahora sí mostrará "3" o "4" correctamente
         "notas": str(mejor.get("Notas", ""))
     }
 
@@ -172,7 +193,7 @@ with st.sidebar:
         st.rerun()
 
 df = get_data()
-st.title("🦍 Gym Tracker Pro")
+st.title("Gym Tracker Pro")
 
 # === SELECTOR DE RUTINA ===
 st.markdown("### ¿Qué entrenamos hoy?")
@@ -183,7 +204,7 @@ t1, t2, t3 = st.tabs(["💪 REGISTRO", "📊 PROGRESO", "📅 DIARIO"])
 
 # === TAB 1: REGISTRO ===
 with t1:
-    # 1. Filtro de Categorías según el día seleccionado
+    # Filtro inteligente
     cats_dia = []
     if dia_actual == "PECHO Y TRÍCEPS": cats_dia = ["PECHO", "TRÍCEPS"]
     elif dia_actual == "ESPALDA Y BÍCEPS": cats_dia = ["ESPALDA", "BÍCEPS"]
@@ -200,7 +221,6 @@ with t1:
         if not df.empty:
             lista_total = df[["Ejercicio", "Categoria"]].drop_duplicates().sort_values("Ejercicio")
             
-            # Aplicar filtro inteligente
             if dia_actual not in ["FULL BODY", "OTRO"]:
                 lista_filtrada = lista_total[lista_total["Categoria"].isin(cats_dia)]
                 lista_mostrar = lista_filtrada["Ejercicio"].unique() if not lista_filtrada.empty else lista_total["Ejercicio"].unique()
@@ -214,7 +234,8 @@ with t1:
             
             ej_seleccionado = st.selectbox("Ejercicio:", lista_mostrar, index=idx)
             if ej_seleccionado:
-                cat_seleccionada = df[df["Ejercicio"] == ej_seleccionado].iloc[0]["Categoria"]
+                cat_row = df[df["Ejercicio"] == ej_seleccionado]
+                if not cat_row.empty: cat_seleccionada = cat_row.iloc[0]["Categoria"]
     
     else: # MODO CREAR
         c_new1, c_new2 = st.columns([2, 1])
@@ -225,7 +246,7 @@ with t1:
             cat_seleccionada = cat_manual
             st.success(f"Creando: {nuevo_nombre} ({cat_manual})")
 
-    # 2. Tarjeta Visual y Formulario
+    # Tarjeta y Formulario
     if ej_seleccionado:
         st.session_state.ejercicio_actual = ej_seleccionado
         stats = get_last_session_stats(df, ej_seleccionado)
@@ -241,7 +262,7 @@ with t1:
                 st.session_state.series_input = 1
             st.session_state.ultimo_ej_visto = ej_seleccionado
 
-        # --- AQUÍ VUELVE LA TARJETA VISUAL BONITA ---
+        # --- TARJETA VISUAL PREMIUM ---
         if stats:
             p_val = convert_display(stats['peso'], modo_lb)
             st.markdown(f"""
@@ -253,8 +274,8 @@ with t1:
                         <span class="sub-metric">x {stats['reps']} reps</span>
                     </div>
                     <div class="secondary-box">
-                        <span style="font-size: 1.5rem; font-weight: bold;">{stats['series']}</span><br>
-                        <span style="font-size: 0.8rem; color: #666;">SERIES TOTALES</span>
+                        <span style="font-size: 1.5rem; font-weight: bold; color: #333;">{stats['series']}</span><br>
+                        <span style="font-size: 0.75rem; color: #666; font-weight: bold;">SERIES TOTALES</span>
                     </div>
                 </div>
                 <div class="notes-section">
@@ -286,7 +307,7 @@ with t1:
                 row = [fecha, ej_seleccionado, peso_kg, series, reps, rir, vol, notas, cat_seleccionada, dia_actual]
                 
                 if save_data(row):
-                    st.toast(f"Guardado con éxito!", icon="🔥")
+                    st.toast(f"Guardado!", icon="🔥")
                     st.session_state.series_input += 1
                     st.session_state.peso_input = peso
                     get_data.clear()
@@ -308,14 +329,13 @@ with t1:
         st.session_state.timer_running = False
         st.rerun()
 
-# === TAB 2: PROGRESO (GRÁFICAS RECUPERADAS) ===
+# === TAB 2: PROGRESO ===
 with t2:
     if not df.empty:
         ej_g = st.selectbox("Analizar Ejercicio:", sorted(df["Ejercicio"].unique()))
         df_g = df[df["Ejercicio"] == ej_g].copy()
         
         if not df_g.empty:
-            # Agrupar datos por día
             df_day = df_g.groupby("Fecha").agg({
                 "Peso_KG": "max",
                 "Volumen": "sum"
@@ -323,11 +343,8 @@ with t2:
             
             st.subheader("Evolución de Rendimiento")
             
-            # --- AQUÍ ESTÁN LAS DOS GRÁFICAS DE VUELTA ---
             col_graph1, col_graph2 = st.columns(2)
-            
             with col_graph1:
-                # Gráfica 1: Fuerza (Área Roja)
                 fig1 = px.area(df_day, x="Fecha", y="Peso_KG", markers=True, 
                                title="<b>Fuerza Máxima (KG)</b>", 
                                labels={"Peso_KG": "Mejor Serie"})
@@ -336,7 +353,6 @@ with t2:
                 st.plotly_chart(fig1, use_container_width=True)
                 
             with col_graph2:
-                # Gráfica 2: Volumen (Barras de Calor)
                 fig2 = px.bar(df_day, x="Fecha", y="Volumen", 
                               title="<b>Volumen Total (KG)</b>",
                               color="Volumen", color_continuous_scale="RdBu_r")
@@ -347,7 +363,6 @@ with t2:
 with t3:
     st.subheader("Historial de Entrenamientos")
     if not df.empty:
-        # CORREGIDO: ascending=False
         grupos = df.groupby(["Fecha", "Tipo_Sesion"]).size().reset_index().sort_values("Fecha", ascending=False)
         
         for _, row in grupos.iterrows():
