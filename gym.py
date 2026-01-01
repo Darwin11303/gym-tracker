@@ -6,36 +6,44 @@ from datetime import datetime
 import time
 import plotly.express as px
 
-# --- 1. CONFIGURACIÓN MINIMALISTA ---
-st.set_page_config(page_title="Gym Tracker", page_icon="🏋️", layout="wide")
+# --- 1. CONFIGURACIÓN VISUAL (MINIMALISTA) ---
+st.set_page_config(page_title="Gym Tracker", page_icon="❚█══█❚", layout="wide")
 
-# CSS: Estilo limpio, botones grandes para móvil, sin adornos innecesarios
+# CSS: Estilos sobrios, funcionales y sin "cringe"
 st.markdown("""
     <style>
+    /* Botones sólidos y grandes */
     .stButton>button {
-        height: 3.5rem;
+        height: 3.2rem;
         width: 100%;
-        font-size: 18px !important;
         font-weight: 600;
-        border-radius: 8px;
+        border-radius: 6px;
+        background-color: #262730;
+        color: white;
     }
-    input[type=number] { font-size: 1.2rem; }
+    .stButton>button:hover {
+        border-color: #FF4B4B;
+        color: #FF4B4B;
+    }
+    /* Inputs numéricos grandes */
+    input[type=number] { font-size: 1.1rem; }
     
-    /* Tarjeta de información minimalista */
-    .data-card {
-        background-color: #f8f9fa;
-        border-left: 4px solid #31333F; /* Acento oscuro */
+    /* Tarjeta de información limpia */
+    .info-card {
+        background-color: #f0f2f6;
         padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #FF4B4B; /* Toque de color */
         margin-bottom: 20px;
-        border-radius: 4px;
     }
-    .metric-label { font-size: 0.9em; color: #666; }
-    .metric-value { font-size: 1.4em; font-weight: bold; color: #333; }
+    .main-stat { font-size: 1.5em; font-weight: bold; color: #31333F; }
+    .sub-stat { font-size: 1.1em; color: #555; margin-left: 10px; }
+    .meta-data { font-size: 0.9em; color: #666; margin-top: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GESTIÓN DE ESTADO ---
-vars_to_init = {
+# --- 2. GESTIÓN DE VARIABLES ---
+vars_init = {
     'ejercicio_actual': None,
     'peso_input': 0.0,
     'reps_input': 10,
@@ -43,11 +51,10 @@ vars_to_init = {
     'timer_running': False,
     'ultimo_ej_visto': None
 }
-for key, val in vars_to_init.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+for k, v in vars_init.items():
+    if k not in st.session_state: st.session_state[k] = v
 
-# --- 3. CONEXIÓN (BACKEND) ---
+# --- 3. CONEXIÓN Y DATOS (BLINDADA) ---
 @st.cache_resource
 def get_google_sheet():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -72,253 +79,257 @@ def get_data():
         df = pd.DataFrame(data)
         if df.empty: return df
         
+        # 1. Limpieza de Texto
         if "Ejercicio" in df.columns:
             df["Ejercicio"] = df["Ejercicio"].astype(str).str.strip().str.upper()
+        
+        # 2. Limpieza de Fechas
         if "Fecha" in df.columns:
             df["Fecha"] = pd.to_datetime(df["Fecha"], dayfirst=True, errors='coerce').dt.date
             df = df.dropna(subset=["Fecha"])
-        
-        # Asegurar números
-        cols_num = ["Peso_KG", "Series", "Reps", "1RM_Estimado"]
-        for c in cols_num:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+
+        # 3. Limpieza Numérica (CRÍTICO PARA EVITAR ERRORES)
+        cols_num = ["Peso_KG", "Series", "Reps", "Volumen", "1RM_Estimado"]
+        for col in cols_num:
+            if col in df.columns:
+                # Forzamos conversión a número, si falla pone 0
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Error leyendo datos: {e}")
         return pd.DataFrame()
 
-def save_data(row_data):
+def save_data(row):
     sheet = get_google_sheet()
     if sheet:
-        sheet.append_row(row_data)
+        sheet.append_row(row)
         return True
     return False
 
-# --- 4. LÓGICA DE UNIDADES & DATOS ---
+# --- 4. LÓGICA DE NEGOCIO ---
 
-def convertir_mostrar(peso_kg, usar_libras):
-    """Convierte KG a LB solo para visualización si el usuario quiere."""
-    if usar_libras:
-        return round(peso_kg * 2.20462, 2)
-    return peso_kg
-
-def convertir_guardar(peso_input, usar_libras):
-    """Convierte el input del usuario a KG para guardar en la BD."""
-    if usar_libras:
-        return round(peso_input / 2.20462, 2)
-    return peso_input
-
-def get_last_workout_stats(df, exercise_name):
-    """Busca la última sesión y saca los datos clave."""
-    if df.empty or exercise_name not in df["Ejercicio"].values:
+def get_last_session_stats(df, ejercicio):
+    """Obtiene los datos de la última sesión registrada."""
+    if df.empty or ejercicio not in df["Ejercicio"].values:
         return None
-
-    historial = df[df["Ejercicio"] == exercise_name].sort_values(by="Fecha", ascending=False)
+    
+    # Filtrar y ordenar por fecha más reciente
+    historial = df[df["Ejercicio"] == ejercicio].sort_values("Fecha", ascending=False)
     ultima_fecha = historial.iloc[0]["Fecha"]
-    ultima_sesion = historial[historial["Fecha"] == ultima_fecha]
     
-    # Buscamos la serie con más peso de ese día como referencia
-    mejor_serie = ultima_sesion.loc[ultima_sesion["Peso_KG"].idxmax()]
+    # Obtener solo los datos de ese día
+    sesion_dia = historial[historial["Fecha"] == ultima_fecha]
     
-    # Calculamos total de series hechas ese día
-    total_series = ultima_sesion.shape[0] 
+    # Dato representativo: La serie con más peso
+    mejor_serie = sesion_dia.loc[sesion_dia["Peso_KG"].idxmax()]
+    
+    # Contar cuántas series se hicieron ese día (filas)
+    total_series = len(sesion_dia)
     
     return {
         "fecha": ultima_fecha,
         "peso_kg": float(mejor_serie["Peso_KG"]),
         "reps": int(mejor_serie["Reps"]),
-        "series_totales": total_series, # Series que hiciste ese día en total
+        "series_totales": total_series,
         "notas": str(mejor_serie.get("Notas", ""))
     }
 
-# --- 5. INTERFAZ DE USUARIO ---
+def convert_display(val_kg, is_lb):
+    """Solo para mostrar en pantalla."""
+    return round(val_kg * 2.20462, 2) if is_lb else val_kg
 
-# BARRA LATERAL (CONFIGURACIÓN)
+def convert_save(val_input, is_lb):
+    """Convierte a KG para guardar si el input fue en LB."""
+    return round(val_input / 2.20462, 2) if is_lb else val_input
+
+# --- 5. INTERFAZ ---
+
+# Sidebar Config
 with st.sidebar:
-    st.header("⚙️ Ajustes")
-    unidad = st.radio("Unidad de Medida:", ["KG (Kilogramos)", "LB (Libras)"])
-    usar_lb = "LB" in unidad
-    etiqueta_peso = "Libras (LB)" if usar_lb else "Kilos (KG)"
+    st.header("Ajustes")
+    # Toggle simple
+    modo_lb = st.toggle("Modo Libras (Input)", value=False)
+    unit_label = "LB" if modo_lb else "KG"
     
     st.divider()
-    if st.button("Recargar Datos"):
+    if st.button("🔄 Actualizar Datos"):
         get_data.clear()
         st.rerun()
 
-# CUERPO PRINCIPAL
-st.title("Entrenamiento")
-
+# Carga inicial
 df = get_data()
-tab_track, tab_progreso, tab_historial = st.tabs(["📝 REGISTRO", "📈 PROGRESO", "📅 HISTORIAL"])
 
-# === PESTAÑA 1: REGISTRO ===
-with tab_track:
-    # 1. Selección (Indestructible)
-    modo = st.radio("Acción:", ["Seleccionar", "Nuevo Ejercicio"], horizontal=True, label_visibility="collapsed")
+st.title("Gym Tracker")
+
+# Tabs principales
+t_input, t_graphs, t_history = st.tabs(["Registro", "Progreso", "Historial"])
+
+# === TAB 1: REGISTRO ===
+with t_input:
+    # Selector de Ejercicio
+    col_sel, col_new = st.columns([2, 1])
     
-    ejercicio_seleccionado = None
+    lista_ej = sorted(df["Ejercicio"].unique()) if not df.empty else []
     
-    if modo == "Seleccionar":
-        if not df.empty:
-            lista = sorted(df["Ejercicio"].unique())
-            idx = lista.index(st.session_state.ejercicio_actual) if st.session_state.ejercicio_actual in lista else 0
-            ejercicio_seleccionado = st.selectbox("Ejercicio:", lista, index=idx)
+    opcion = st.radio("Modo:", ["Lista", "Crear"], horizontal=True, label_visibility="collapsed")
+    
+    ej_seleccionado = None
+    if opcion == "Lista":
+        if lista_ej:
+            idx = 0
+            if st.session_state.ejercicio_actual in lista_ej:
+                idx = lista_ej.index(st.session_state.ejercicio_actual)
+            ej_seleccionado = st.selectbox("Ejercicio:", lista_ej, index=idx)
+        else:
+            st.warning("Sin ejercicios.")
     else:
-        nuevo = st.text_input("Nombre del ejercicio:").strip().upper()
-        if nuevo: ejercicio_seleccionado = nuevo
+        nuevo = st.text_input("Nuevo Ejercicio:").strip().upper()
+        if nuevo: ej_seleccionado = nuevo
 
-    if ejercicio_seleccionado:
-        st.session_state.ejercicio_actual = ejercicio_seleccionado
+    # Si tenemos ejercicio, mostramos interfaz
+    if ej_seleccionado:
+        st.session_state.ejercicio_actual = ej_seleccionado
+        stats = get_last_session_stats(df, ej_seleccionado)
         
-        # 2. Tarjeta "Última Vez" (Limpia y Funcional)
-        stats = get_last_workout_stats(df, ejercicio_seleccionado)
-        
-        # Auto-Fill Logic: Si cambiamos de ejercicio, cargamos datos anteriores
-        if st.session_state.ultimo_ej_visto != ejercicio_seleccionado:
+        # Auto-Fill solo al cambiar de ejercicio
+        if st.session_state.ultimo_ej_visto != ej_seleccionado:
             if stats:
-                # Convertimos el peso de la BD (KG) a la unidad preferida para el input
-                peso_visual = convertir_mostrar(stats["peso_kg"], usar_lb)
-                st.session_state.peso_input = peso_visual
+                st.session_state.peso_input = convert_display(stats["peso_kg"], modo_lb)
                 st.session_state.reps_input = stats["reps"]
-                st.session_state.series_input = 1
+                st.session_state.series_input = 1 # Reiniciar contador de series para hoy
             else:
                 st.session_state.peso_input = 0.0
                 st.session_state.series_input = 1
-            st.session_state.ultimo_ej_visto = ejercicio_seleccionado
+            st.session_state.ultimo_ej_visto = ej_seleccionado
 
+        # TARJETA ÚLTIMA SESIÓN (Con Series incluidas)
         if stats:
-            p_mostrar = convertir_mostrar(stats['peso_kg'], usar_lb)
-            u_txt = "LB" if usar_lb else "KG"
+            p_show = convert_display(stats['peso_kg'], modo_lb)
+            u_show = "LB" if modo_lb else "KG"
             
             st.markdown(f"""
-            <div class="data-card">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div class="info-card">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <span class="metric-label">Última sesión: {stats['fecha']}</span><br>
-                        <span class="metric-value">{p_mostrar} {u_txt}</span> 
-                        <span style="font-size:1.2em; color:#555;">x {stats['reps']} reps</span>
+                        <span style="font-size:0.85em; text-transform:uppercase; letter-spacing:1px; color:#888;">Última Sesión ({stats['fecha']})</span><br>
+                        <span class="main-stat">{p_show} {u_show}</span> 
+                        <span class="sub-stat">x {stats['reps']} reps</span>
                     </div>
                     <div style="text-align:right;">
-                        <span class="metric-label">Volumen</span><br>
-                        <span style="font-size:1.1em; font-weight:bold;">{stats['series_totales']} Series</span>
+                        <span style="font-size:2em; font-weight:bold; color:#31333F;">{stats['series_totales']}</span><br>
+                        <span style="font-size:0.8em; color:#666;">SERIES</span>
                     </div>
                 </div>
-                <div style="margin-top:5px; font-size:0.9em; color:#666; font-style:italic;">
-                    {stats['notas'] if stats['notas'] else "Sin notas"}
-                </div>
+                <div class="meta-data">📝 {stats['notas'] if stats['notas'] else "Sin notas"}</div>
             </div>
             """, unsafe_allow_html=True)
-        
-        # 3. Formulario de Input
+        else:
+            st.info("🔹 Primer registro para este ejercicio.")
+
+        # INPUT FORM
         c1, c2 = st.columns(2)
-        val_peso = c1.number_input(etiqueta_peso, value=float(st.session_state.peso_input), step=2.5, key="w_in")
-        val_reps = c2.number_input("Reps", value=int(st.session_state.reps_input), step=1, key="r_in")
+        in_peso = c1.number_input(f"Peso ({unit_label})", value=float(st.session_state.peso_input), step=2.5)
+        in_reps = c2.number_input("Reps", value=int(st.session_state.reps_input), step=1)
         
         c3, c4 = st.columns(2)
-        val_series = c3.number_input("Serie N°", value=int(st.session_state.series_input), step=1, key="s_in")
-        val_rir = c4.selectbox("RIR", ["0 (Fallo)", "1", "2", "3", "Suave"], index=1, key="rir_in")
+        in_series = c3.number_input("Serie N°", value=int(st.session_state.series_input), step=1)
+        in_rir = c4.selectbox("RIR", ["0 (Fallo)", "1", "2", "3", "Suave"], index=1)
         
-        val_notas = st.text_input("Notas", placeholder="Sensaciones...", key="n_in")
-        
-        if st.button("Guardar Serie", type="primary"):
+        in_notas = st.text_input("Notas", placeholder="Sensaciones...")
+
+        if st.button("GUARDAR SERIE"):
             try:
-                # Conversión Crítica: Guardamos SIEMPRE en KG
-                peso_db = convertir_guardar(val_peso, usar_lb)
+                # Guardar siempre en KG
+                peso_kg_save = convert_save(in_peso, modo_lb)
                 
-                rir_c = val_rir.split(" ")[0]
-                rm = round(peso_db * (1 + (val_reps / 30)), 2)
-                vol = peso_db * val_reps * val_series
-                fecha = datetime.now().strftime("%d/%m/%Y")
+                # Cálculos
+                rir_val = in_rir.split(" ")[0]
+                rm_est = round(peso_kg_save * (1 + (in_reps / 30)), 2)
+                vol_tot = peso_kg_save * in_reps * in_series
+                fecha_str = datetime.now().strftime("%d/%m/%Y")
                 
-                fila = [fecha, ejercicio_seleccionado, peso_db, val_series, val_reps, rir_c, rm, vol, val_notas]
+                row = [fecha_str, ej_seleccionado, peso_kg_save, in_series, in_reps, rir_val, rm_est, vol_tot, in_notas]
                 
-                if save_data(fila):
-                    st.toast(f"Guardado: {val_peso} {etiqueta_peso} x {val_reps}", icon="✅")
+                if save_data(row):
+                    st.toast(f"✅ Guardado: {in_peso}{unit_label} x {in_reps}")
                     st.session_state.series_input += 1
-                    st.session_state.peso_input = val_peso # Mantenemos el valor visual
+                    st.session_state.peso_input = in_peso # Mantener visual
                     get_data.clear()
                     st.session_state.timer_running = True
                     st.rerun()
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error guardando: {e}")
 
-    # Timer Minimalista
+    # TIMER (Simple)
     if st.session_state.timer_running:
-        st.markdown("---")
-        t_col, b_col = st.columns([4, 1])
-        t_ph = t_col.empty()
-        if b_col.button("Saltar"):
+        st.divider()
+        col_t, col_b = st.columns([3,1])
+        ph_timer = col_t.empty()
+        if col_b.button("Saltar"):
             st.session_state.timer_running = False
             st.rerun()
             
-        segundos = 90
-        bar = st.progress(0)
-        for i in range(segundos):
+        for s in range(90, 0, -1):
             if not st.session_state.timer_running: break
-            bar.progress((i+1)/segundos)
-            t_ph.caption(f"Descanso: {segundos - i}s")
+            ph_timer.markdown(f"#### ⏳ Descanso: {s}s")
             time.sleep(1)
         st.session_state.timer_running = False
         st.rerun()
 
-# === PESTAÑA 2: PROGRESO (GRÁFICAS) ===
-with tab_progreso:
+# === TAB 2: PROGRESO (GRÁFICAS SEPARADAS Y LIMPIAS) ===
+with t_graphs:
     if df.empty:
-        st.info("No hay datos suficientes.")
+        st.warning("Faltan datos.")
     else:
-        st.subheader("Evolución de Fuerza")
-        lista_graf = sorted(df["Ejercicio"].unique())
-        ej_graf = st.selectbox("Selecciona Ejercicio:", lista_graf, key="sel_graf")
+        st.subheader("Análisis de Rendimiento")
+        lista_g = sorted(df["Ejercicio"].unique())
+        ej_g = st.selectbox("Selecciona Ejercicio:", lista_g, key="sb_graph")
         
-        df_g = df[df["Ejercicio"] == ej_graf].sort_values("Fecha")
+        # Filtrar datos del ejercicio
+        df_g = df[df["Ejercicio"] == ej_g].copy()
         
         if not df_g.empty:
-            # Opción de ver gráfica en LB o KG
-            y_col = "1RM_Estimado"
-            titulo_y = "1RM Estimado (KG)"
+            # AGRUPAR POR DÍA (La clave para gráficas limpias)
+            # Calculamos: Peso Máximo del día y Volumen Total del día
+            df_day = df_g.groupby("Fecha").agg({
+                "Peso_KG": "max",
+                "Volumen": "sum"
+            }).reset_index().sort_values("Fecha")
             
-            if usar_lb:
-                df_g["1RM_LB"] = df_g["1RM_Estimado"] * 2.20462
-                y_col = "1RM_LB"
-                titulo_y = "1RM Estimado (LB)"
+            col_g1, col_g2 = st.columns(2)
+            
+            with col_g1:
+                # Gráfica 1: Fuerza (Peso Máximo)
+                fig1 = px.line(df_day, x="Fecha", y="Peso_KG", markers=True, 
+                               title="Fuerza Máxima (Mejor Serie)",
+                               labels={"Peso_KG": "Peso (KG)"})
+                fig1.update_traces(line_color="#FF4B4B", line_width=3)
+                fig1.update_layout(height=350)
+                st.plotly_chart(fig1, use_container_width=True)
+            
+            with col_g2:
+                # Gráfica 2: Capacidad de Trabajo (Volumen)
+                fig2 = px.bar(df_day, x="Fecha", y="Volumen", 
+                              title="Volumen Total (Carga de Trabajo)",
+                              labels={"Volumen": "Volumen Total (KG)"})
+                fig2.update_traces(marker_color="#262730")
+                fig2.update_layout(height=350)
+                st.plotly_chart(fig2, use_container_width=True)
 
-            fig = px.line(df_g, x="Fecha", y=y_col, markers=True, 
-                          title=f"Progreso Estimado en {ej_graf}")
-            fig.update_layout(yaxis_title=titulo_y, xaxis_title="", template="simple_white")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Datos récord
-            max_peso = df_g["Peso_KG"].max()
-            if usar_lb: max_peso *= 2.20462
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Peso Máximo Movido", f"{round(max_peso, 2)} {'LB' if usar_lb else 'KG'}")
-            c2.metric("Volumen Total Histórico", f"{int(df_g['Volumen'].sum())} Kg")
-
-# === PESTAÑA 3: HISTORIAL (POR DÍAS) ===
-with tab_historial:
-    st.subheader("Diario de Entrenamiento")
+# === TAB 3: HISTORIAL (LIMPIO) ===
+with t_history:
+    st.subheader("Diario")
     if df.empty:
-        st.text("Sin registros.")
+        st.caption("No hay datos.")
     else:
-        # Agrupar por fecha descendente
         fechas = sorted(df["Fecha"].unique(), reverse=True)
-        
-        for fecha in fechas:
-            with st.expander(f"📅 {fecha.strftime('%A %d %B, %Y')}"):
-                df_day = df[df["Fecha"] == fecha].copy()
-                
-                # Convertir a LB visualmente si es necesario
-                if usar_lb:
-                    df_day["Peso"] = (df_day["Peso_KG"] * 2.20462).round(2).astype(str) + " lb"
-                else:
-                    df_day["Peso"] = df_day["Peso_KG"].astype(str) + " kg"
-                
-                # Seleccionar columnas limpias para mostrar
-                display_cols = ["Ejercicio", "Peso", "Series", "Reps", "RIR", "Notas"]
+        for f in fechas:
+            with st.expander(f"📅 {f.strftime('%d-%m-%Y')}"):
+                d = df[df["Fecha"] == f].copy()
+                # Mostramos columnas clave
                 st.dataframe(
-                    df_day[display_cols], 
-                    use_container_width=True, 
+                    d[["Ejercicio", "Peso_KG", "Series", "Reps", "RIR", "Notas"]],
+                    use_container_width=True,
                     hide_index=True
                 )
