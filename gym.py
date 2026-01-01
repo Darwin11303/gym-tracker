@@ -7,7 +7,6 @@ import time
 import plotly.express as px
 
 # --- 1. CONFIGURACIÓN VISUAL (ESTILO PREMIUM) ---
-# Icono neutro y configuración Wide
 st.set_page_config(page_title="Gym Tracker", page_icon="⚡", layout="wide")
 
 st.markdown("""
@@ -115,26 +114,40 @@ def get_data():
         df = pd.DataFrame(data)
         if df.empty: return df
         
+        # --- NUEVO: CORRECCIÓN DE NOMBRES DE COLUMNAS ---
+        # Esto soluciona que en Excel tengas "Tipo_sesion" y el código busque "Tipo_Sesion"
+        df.columns = [c.strip() for c in df.columns] # Quitar espacios extra
+        rename_map = {
+            "Tipo_sesion": "Tipo_Sesion",
+            "tipo_sesion": "Tipo_Sesion",
+            "categoria": "Categoria",
+            "Peso_kg": "Peso_KG"
+        }
+        df = df.rename(columns=rename_map)
+
         # Limpieza de texto
         if "Ejercicio" in df.columns:
             df["Ejercicio"] = df["Ejercicio"].astype(str).str.strip().str.upper()
         
-        # --- CORRECCIÓN FECHAS MIXTAS ---
-        # format='mixed' permite leer "19/12/2025" y "2025-12-26" a la vez sin fallar
+        # Corrección Fechas Mixtas
         if "Fecha" in df.columns:
             df["Fecha"] = pd.to_datetime(df["Fecha"], format='mixed', dayfirst=True, errors='coerce').dt.date
             df = df.dropna(subset=["Fecha"])
         
-        # Columnas nuevas
+        # Columnas nuevas (asegurar existencia)
         if "Categoria" not in df.columns: df["Categoria"] = "GENERAL"
         if "Tipo_Sesion" not in df.columns: df["Tipo_Sesion"] = "ENTRENO"
+
+        # Rellenar vacíos para evitar errores de filtro
+        df["Categoria"] = df["Categoria"].fillna("GENERAL").replace("", "GENERAL")
+        df["Tipo_Sesion"] = df["Tipo_Sesion"].fillna("ENTRENO").replace("", "ENTRENO")
 
         cols_num = ["Peso_KG", "Series", "Reps", "Volumen"]
         for col in cols_num:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
-        # Calcular Volumen si falta (Parche para datos viejos)
+        # Calcular Volumen si falta
         if "Volumen" in df.columns and "Peso_KG" in df.columns:
             df["Volumen"] = df.apply(
                 lambda x: (x["Peso_KG"] * x["Series"] * x["Reps"]) if x["Volumen"] == 0 else x["Volumen"], 
@@ -142,7 +155,8 @@ def get_data():
             )
             
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Error leyendo datos: {e}")
         return pd.DataFrame()
 
 def save_data(row):
@@ -163,18 +177,17 @@ def get_last_session_stats(df, ejercicio):
     # Filtrar solo esa sesión
     sesion = historial[historial["Fecha"] == ultima_fecha]
     
-    # Mejor serie (para el peso)
+    # Mejor serie
     mejor = sesion.loc[sesion["Peso_KG"].idxmax()]
     
-    # --- CORRECCIÓN SERIES ---
-    # Sumamos el valor de la columna 'Series' en lugar de contar filas
+    # Corrección Series
     total_series = int(sesion["Series"].sum())
     
     return {
         "fecha": ultima_fecha,
         "peso": float(mejor["Peso_KG"]),
         "reps": int(mejor["Reps"]),
-        "series": total_series, # Ahora sí mostrará "3" o "4" correctamente
+        "series": total_series,
         "notas": str(mejor.get("Notas", ""))
     }
 
@@ -197,6 +210,7 @@ st.title("Gym Tracker Pro")
 
 # === SELECTOR DE RUTINA ===
 st.markdown("### ¿Qué entrenamos hoy?")
+# Asegúrate de que estos nombres coincidan con los de tu Excel
 tipos_dia = ["PECHO Y TRÍCEPS", "ESPALDA Y BÍCEPS", "PIERNA", "HOMBRO", "FULL BODY", "OTRO"]
 dia_actual = st.selectbox("Selecciona Rutina:", tipos_dia, index=0, label_visibility="collapsed", key="dia_focus")
 
@@ -221,10 +235,19 @@ with t1:
         if not df.empty:
             lista_total = df[["Ejercicio", "Categoria"]].drop_duplicates().sort_values("Ejercicio")
             
+            # --- MEJORA: FILTRO INSENSIBLE A MAYÚSCULAS ---
             if dia_actual not in ["FULL BODY", "OTRO"]:
-                lista_filtrada = lista_total[lista_total["Categoria"].isin(cats_dia)]
-                lista_mostrar = lista_filtrada["Ejercicio"].unique() if not lista_filtrada.empty else lista_total["Ejercicio"].unique()
-                if lista_filtrada.empty: st.toast(f"No hay ejercicios de {dia_actual} aún.", icon="ℹ️")
+                # Creamos columnas temporales en mayúsculas para comparar sin errores
+                lista_total["Cat_Upper"] = lista_total["Categoria"].str.upper()
+                cats_dia_upper = [c.upper() for c in cats_dia]
+                
+                lista_filtrada = lista_total[lista_total["Cat_Upper"].isin(cats_dia_upper)]
+                
+                if lista_filtrada.empty:
+                    st.toast(f"No encontré ejercicios de {dia_actual}. Mostrando todo.", icon="ℹ️")
+                    lista_mostrar = lista_total["Ejercicio"].unique()
+                else:
+                    lista_mostrar = lista_filtrada["Ejercicio"].unique()
             else:
                 lista_mostrar = lista_total["Ejercicio"].unique()
             
