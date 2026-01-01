@@ -36,7 +36,7 @@ vars_init = {
     'series_input': 1,
     'timer_running': False,
     'ultimo_ej_visto': None,
-    'sesion_actual': 'FULL BODY' # Por defecto
+    'sesion_actual': 'FULL BODY'
 }
 for k, v in vars_init.items():
     if k not in st.session_state: st.session_state[k] = v
@@ -72,7 +72,9 @@ def get_data():
         if "Fecha" in df.columns:
             df["Fecha"] = pd.to_datetime(df["Fecha"], dayfirst=True, errors='coerce').dt.date
             df = df.dropna(subset=["Fecha"])
-        if "Categoria" not in df.columns: # Retro-compatibilidad
+        
+        # Crear columnas nuevas si no existen (para que no falle con datos viejos)
+        if "Categoria" not in df.columns: 
             df["Categoria"] = "GENERAL"
         if "Tipo_Sesion" not in df.columns:
             df["Tipo_Sesion"] = "ENTRENO"
@@ -123,7 +125,7 @@ with st.sidebar:
 df = get_data()
 st.title("Gym Tracker")
 
-# === SELECTOR DE DÍA (LA CLAVE DE TU ORGANIZACIÓN) ===
+# === SELECTOR DE DÍA ===
 st.markdown("### ¿Qué toca hoy?")
 tipos_dia = ["PECHO Y TRÍCEPS", "ESPALDA Y BÍCEPS", "PIERNA", "HOMBRO", "FULL BODY", "OTRO"]
 dia_actual = st.selectbox("Selecciona tu rutina:", tipos_dia, index=0, key="dia_focus")
@@ -151,12 +153,11 @@ with t1:
             
             # FILTRO INTELIGENTE
             if dia_actual != "FULL BODY" and dia_actual != "OTRO":
-                # Muestra ejercicios que coincidan con la categoría del día
                 lista_filtrada = lista_total[lista_total["Categoria"].isin(cats_dia)]
                 
                 if lista_filtrada.empty:
                     st.warning(f"No tienes ejercicios guardados de {dia_actual}. ¡Crea uno abajo!")
-                    lista_mostrar = lista_total["Ejercicio"].unique() # Fallback a mostrar todos
+                    lista_mostrar = lista_total["Ejercicio"].unique()
                 else:
                     st.caption(f"Filtrando por: {', '.join(cats_dia)}")
                     lista_mostrar = lista_filtrada["Ejercicio"].unique()
@@ -169,7 +170,6 @@ with t1:
             
             ej_seleccionado = st.selectbox("Ejercicio:", lista_mostrar, index=idx)
             
-            # Recuperar categoría para guardarla de nuevo
             if ej_seleccionado:
                 cat_row = df[df["Ejercicio"] == ej_seleccionado].iloc[0]
                 cat_seleccionada = cat_row["Categoria"]
@@ -177,7 +177,6 @@ with t1:
     else: # MODO CREAR
         c_new1, c_new2 = st.columns([2, 1])
         nuevo_nombre = c_new1.text_input("Nombre del Ejercicio:").strip().upper()
-        # AQUÍ ESTÁ LA SOLUCIÓN: TÚ ELIGES LA CATEGORÍA
         cat_manual = c_new2.selectbox("Grupo Muscular:", ["PECHO", "ESPALDA", "PIERNA", "HOMBRO", "BÍCEPS", "TRÍCEPS", "ABDOMEN", "OTRO"])
         
         if nuevo_nombre:
@@ -222,8 +221,6 @@ with t1:
                 vol = peso_kg * reps * series
                 fecha = datetime.now().strftime("%d/%m/%Y")
                 
-                # GUARDAMOS LA CATEGORÍA Y EL TIPO DE DÍA EN EL EXCEL
-                # Columnas: Fecha, Ejercicio, Peso, Series, Reps, RIR, Vol, Notas, Categoria, Tipo_Sesion
                 row = [fecha, ej_seleccionado, peso_kg, series, reps, rir, vol, notas, cat_seleccionada, dia_actual]
                 
                 if save_data(row):
@@ -261,27 +258,22 @@ with t2:
             fig.update_traces(line_color="#FF4B4B", fillcolor="rgba(255, 75, 75, 0.2)")
             st.plotly_chart(fig, use_container_width=True)
 
-# --- TAB 3: HISTORIAL (TU PETICIÓN DE TÍTULOS) ---
+# --- TAB 3: HISTORIAL ---
 with t3:
     st.markdown("### Diario de Entrenamiento")
     if not df.empty:
-        # Agrupar por Fecha Y por Tipo de Sesión
-        # Esto crea bloques como: "2025-01-01 - PECHO Y TRÍCEPS"
-        grupos = df.groupby(["Fecha", "Tipo_Sesion"]).size().reset_index().sort_values("Fecha", reverse=True)
+        # AQUÍ ESTABA EL ERROR: CORREGIDO 'reverse=True' por 'ascending=False'
+        grupos = df.groupby(["Fecha", "Tipo_Sesion"]).size().reset_index().sort_values("Fecha", ascending=False)
         
         for _, row in grupos.iterrows():
             f = row["Fecha"]
             tipo = row["Tipo_Sesion"]
             
-            # Título Personalizado del Expander
             label_fecha = f.strftime('%d/%m/%Y')
             titulo = f"📅 {label_fecha} | 🏷️ {tipo}"
             
             with st.expander(titulo):
-                # Filtrar datos de ese día y sesión
                 d = df[(df["Fecha"] == f) & (df["Tipo_Sesion"] == tipo)]
-                
-                # Mostrar lo importante
                 st.dataframe(
                     d[["Ejercicio", "Peso_KG", "Series", "Reps", "RIR", "Notas"]],
                     use_container_width=True, 
